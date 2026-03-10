@@ -1,10 +1,44 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const { createRequestLimiter } = require('./requestLimiter');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Throttling / circuit-breaker configuration (env-based)
+const REQUEST_THROTTLING_ENABLED =
+  String(process.env.REQUEST_THROTTLING_ENABLED || 'false').toLowerCase() ===
+  'true';
+
+const REQUEST_MAX_CONCURRENCY = Number(
+  process.env.REQUEST_MAX_CONCURRENCY || '2'
+);
+const REQUEST_DELAY_MS = Number(process.env.REQUEST_DELAY_MS || '2000');
+const REQUEST_BACKOFF_BASE_MS = Number(
+  process.env.REQUEST_BACKOFF_BASE_MS || '1000'
+);
+const REQUEST_BACKOFF_FACTOR = Number(
+  process.env.REQUEST_BACKOFF_FACTOR || '2.0'
+);
+const REQUEST_CIRCUIT_FAILURE_THRESHOLD = Number(
+  process.env.REQUEST_CIRCUIT_FAILURE_THRESHOLD || '5'
+);
+const REQUEST_CIRCUIT_OPEN_MS = Number(
+  process.env.REQUEST_CIRCUIT_OPEN_MS || '60000'
+);
+
+const requestLimiter = createRequestLimiter({
+  enabled: REQUEST_THROTTLING_ENABLED,
+  maxConcurrency: REQUEST_MAX_CONCURRENCY,
+  delayMs: REQUEST_DELAY_MS,
+  backoffBaseMs: REQUEST_BACKOFF_BASE_MS,
+  backoffFactor: REQUEST_BACKOFF_FACTOR,
+  failureThreshold: REQUEST_CIRCUIT_FAILURE_THRESHOLD,
+  circuitOpenMs: REQUEST_CIRCUIT_OPEN_MS,
+});
 
 app.use(cors());
 app.use(express.json());
@@ -15,6 +49,8 @@ app.use(express.json());
  * preceding sibling text, parent's preceding sibling text, placeholder, name.
  */
 function findFieldHeader($, element) {
+
+  console.log(requestLimiter);
   const $el = $(element);
   const id = $el.attr('id');
 
@@ -145,41 +181,53 @@ app.post('/api/extract', async (req, res) => {
 
   const results = [];
 
-  for (const suffix of suffixes) {
-    const trimmed = suffix.trim();
-    if (!trimmed) continue;
+  const tasks = suffixes
+    .map((suffix) => suffix.trim())
+    .filter(Boolean)
+    .map((trimmed) => {
+      const url =
+        urlPrefix.replace(/\/+$/, '') + '/' + trimmed.replace(/^\/+/, '');
 
-    const url = urlPrefix.replace(/\/+$/, '') + '/' + trimmed.replace(/^\/+/, '');
+      const run = async () => {
+        try {
+          const response = await axios.get(url, {
+            timeout: 15000,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (compatible; HtmlExtractor/1.0)',
+              Accept: 'text/html,application/xhtml+xml',
+              'Accept-Language': 'he,en;q=0.9',
+            },
+            // Follow redirects
+            maxRedirects: 5,
+            // Treat all 2xx + 3xx as success
+            validateStatus: (status) => status < 400,
+          });
 
-    try {
-      const response = await axios.get(url, {
-        timeout: 15000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; HtmlExtractor/1.0)',
-          'Accept': 'text/html,application/xhtml+xml',
-          'Accept-Language': 'he,en;q=0.9',
-        },
-        // Follow redirects
-        maxRedirects: 5,
-        // Treat all 2xx + 3xx as success
-        validateStatus: (status) => status < 400,
-      });
+          const fields = extractFields(response.data);
 
-      const fields = extractFields(response.data);
+          results.push({ url, status: 'ok', fields });
+        } catch (err) {
+          const message = err.response
+            ? `HTTP ${err.response.status}`
+            : err.message;
+          results.push({ url, status: 'error', error: message, fields: [] });
+        }
+      };
 
-      console.log(response);
-      results.push({ url, status: 'ok', fields });
-    } catch (err) {
-      const message = err.response
-        ? `HTTP ${err.response.status}`
-        : err.message;
-      results.push({ url, status: 'error', error: message, fields: [] });
-    }
-  }
+      if (REQUEST_THROTTLING_ENABLED) {
+        return requestLimiter.schedule(url, run);
+      }
+
+      return run();
+    });
+
+  // Wait for all fetches to complete (sequentially or via limiter)
+  await Promise.allSettled(tasks);
 
   res.json({ results });
 });
 
 app.listen(PORT, () => {
+  console.log(REQUEST_THROTTLING_ENABLED);
   console.log(`Backend running on http://localhost:${PORT}`);
 });
