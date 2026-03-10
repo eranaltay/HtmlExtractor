@@ -1,9 +1,8 @@
 {
   "name": "html-extractor-frontend",
   "version": "1.0.0",
-  "private": true,
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --port 5173",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -13,6 +12,6 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
-    "vite": "^5.1.4"
+    "vite": "^5.0.12"
   }
 }
