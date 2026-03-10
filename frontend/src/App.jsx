@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import * as XLSX from 'xlsx';
 
 const FIELD_TYPE_LABELS = {
   text: 'Text',
@@ -115,6 +116,111 @@ export default function App() {
     .map((s) => s.trim())
     .filter(Boolean);
 
+  function extractUrlMeta(rawUrl) {
+    try {
+      const u = new URL(rawUrl);
+      const params = u.searchParams;
+
+      let contactId =
+        params.get('ContactID') ||
+        params.get('contactId') ||
+        params.get('contactID') ||
+        params.get('contact_id');
+
+      let fingerprint =
+        params.get('Fingerprint') ||
+        params.get('fingerprint') ||
+        params.get('fp');
+
+      // Fallback: try to infer from path segments (numbers and long hex strings)
+      const segments = u.pathname.split('/').filter(Boolean);
+      if (!contactId) {
+        const numSeg = segments.find((s) => /^\d{6,}$/.test(s));
+        if (numSeg) contactId = numSeg;
+      }
+      if (!fingerprint) {
+        const hexSeg = segments.find((s) => /^[0-9a-fA-F]{16,}$/.test(s));
+        if (hexSeg) fingerprint = hexSeg;
+      }
+
+      return {
+        contactId: contactId || '',
+        fingerprint: fingerprint || '',
+      };
+    } catch {
+      return { contactId: '', fingerprint: '' };
+    }
+  }
+
+  function buildPivotRows() {
+    if (!results || results.length === 0) return;
+
+    // Collect all distinct field headers/names across results
+    const headerSet = new Set();
+    results.forEach((result) => {
+      if (result.status !== 'ok' || !result.fields) return;
+      result.fields.forEach((field) => {
+        const key = field.header || field.name || '';
+        if (key) headerSet.add(key);
+      });
+    });
+
+    const fieldHeaders = Array.from(headerSet);
+    const rows = [];
+    // Header row for pivot table
+    rows.push(['URL', 'ContactID', 'Fingerprint', ...fieldHeaders]);
+
+    // One row per URL, values pivoted into columns
+    results.forEach((result) => {
+      if (result.status !== 'ok' || !result.fields) return;
+      const meta = extractUrlMeta(result.url);
+
+      const valueByHeader = new Map();
+      result.fields.forEach((field) => {
+        const key = field.header || field.name || '';
+        if (!key) return;
+        const v = field.value || '';
+        if (!v) return;
+        const existing = valueByHeader.get(key);
+        if (existing) {
+          valueByHeader.set(key, `${existing}, ${v}`);
+        } else {
+          valueByHeader.set(key, v);
+        }
+      });
+
+      const row = [result.url, meta.contactId, meta.fingerprint];
+      fieldHeaders.forEach((h) => {
+        row.push(valueByHeader.get(h) || '');
+      });
+      rows.push(row);
+    });
+
+    return rows;
+  }
+
+  function handleExportExcel() {
+    const rows = buildPivotRows();
+    if (!rows || rows.length <= 1) return;
+
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Fields');
+
+    const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbout], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'html-fields-export.xlsx';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
   async function handleExtract(e) {
     e.preventDefault();
     setError('');
@@ -214,6 +320,14 @@ export default function App() {
           </button>
           <button type="button" onClick={handleClear} style={btnSecondary}>
             Clear
+          </button>
+          <button
+            type="button"
+            onClick={handleExportExcel}
+            disabled={loading || results.length === 0}
+            style={btnSecondary}
+          >
+            Export Excel
           </button>
         </div>
       </form>

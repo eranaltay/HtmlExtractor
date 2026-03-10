@@ -151,7 +151,6 @@ app.post('/api/extract', async (req, res) => {
 
     const url = urlPrefix.replace(/\/+$/, '') + '/' + trimmed.replace(/^\/+/, '');
 
-    console.log(url);
     try {
       const response = await axios.get(url, {
         timeout: 15000,
@@ -177,7 +176,6 @@ app.post('/api/extract', async (req, res) => {
       results.push({ url, status: 'error', error: message, fields: [] });
     }
   }
-  console.table(results.fields);
 
   res.json({ results });
 });
