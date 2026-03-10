@@ -20,7 +20,9 @@ function findFieldHeader($, element) {
 
   // 1. Explicit <label for="id">
   if (id) {
-    const labelText = $(`label[for="${CSS.escape ? CSS.escape(id) : id}"]`).first().text().trim();
+    // In Node.js there is no global CSS.escape, so we avoid using it
+    const safeId = String(id).replace(/"/g, '\\"');
+    const labelText = $(`label[for="${safeId}"]`).first().text().trim();
     if (labelText) return labelText;
   }
 
@@ -74,7 +76,7 @@ function findFieldHeader($, element) {
  */
 function getFieldValue($, element) {
   const $el = $(element);
-  const tag = element.tagName.toLowerCase();
+  const tag = (element.tagName || element.name || '').toLowerCase();
   const type = ($el.attr('type') || '').toLowerCase();
 
   if (tag === 'textarea') {
@@ -82,10 +84,21 @@ function getFieldValue($, element) {
   }
 
   if (tag === 'select') {
-    const $selected = $el.find('option[selected]');
-    if ($selected.length) return $selected.text().trim();
-    // first option as default
-    return $el.find('option').first().text().trim();
+    const selectedOptions = $el.find('option').filter((_, opt) => {
+      const $opt = $(opt);
+      return $opt.prop('selected') || $opt.attr('selected') !== undefined;
+    });
+
+    if (selectedOptions.length) {
+      const texts = selectedOptions
+        .map((_, opt) => $(opt).text().trim())
+        .get()
+        .filter((t) => t);
+      return texts.join(', ');
+    }
+
+    const firstOptionText = $el.find('option').first().text().trim();
+    return firstOptionText || '';
   }
 
   if (type === 'checkbox' || type === 'radio') {
@@ -106,7 +119,7 @@ function extractFields(html) {
 
   $(FIELD_SELECTOR).each((_, element) => {
     const $el = $(element);
-    const tag = element.tagName.toLowerCase();
+    const tag = (element.tagName || element.name || '').toLowerCase();
     const type = ($el.attr('type') || tag).toLowerCase();
 
     const header = findFieldHeader($, element);
@@ -121,6 +134,9 @@ function extractFields(html) {
 
 // POST /api/extract
 app.post('/api/extract', async (req, res) => {
+
+
+
   const { urlPrefix, suffixes } = req.body;
 
   if (!urlPrefix || !Array.isArray(suffixes) || suffixes.length === 0) {
@@ -135,6 +151,7 @@ app.post('/api/extract', async (req, res) => {
 
     const url = urlPrefix.replace(/\/+$/, '') + '/' + trimmed.replace(/^\/+/, '');
 
+    console.log(url);
     try {
       const response = await axios.get(url, {
         timeout: 15000,
@@ -150,6 +167,8 @@ app.post('/api/extract', async (req, res) => {
       });
 
       const fields = extractFields(response.data);
+
+      console.log(response);
       results.push({ url, status: 'ok', fields });
     } catch (err) {
       const message = err.response
@@ -158,6 +177,7 @@ app.post('/api/extract', async (req, res) => {
       results.push({ url, status: 'error', error: message, fields: [] });
     }
   }
+  console.table(results.fields);
 
   res.json({ results });
 });

@@ -166,7 +166,8 @@ app.post('/extract', async (req, res) => {
 
         const $ = cheerio.load(html);
         const fields = extractFields($);
-
+        console.log(fields);
+        
         return { url, success: true, fields };
       } catch (err) {
         return {
