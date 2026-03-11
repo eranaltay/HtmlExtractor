@@ -50,7 +50,6 @@ app.use(express.json());
  */
 function findFieldHeader($, element) {
 
-  console.log(requestLimiter);
   const $el = $(element);
   const id = $el.attr('id');
 
@@ -228,6 +227,5 @@ app.post('/api/extract', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(REQUEST_THROTTLING_ENABLED);
   console.log(`Backend running on http://localhost:${PORT}`);
 });
